@@ -1,1 +1,124 @@
+use std::path::{Path, PathBuf};
 
+use futures_util::StreamExt;
+use iroh::Endpoint;
+use iroh_blobs::{
+    api::{
+        blobs::{ExportMode, ExportOptions},
+        remote::GetProgressItem,
+    },
+    format::collection::Collection,
+    get::{Stats, request::get_hash_seq_and_sizes},
+    store::fs::FsStore,
+    ticket::BlobTicket,
+};
+use tracing::trace;
+
+use crate::coupon::{CouponMachineConfig, receive_coupon};
+
+pub async fn recv(coupon: &str) -> anyhow::Result<()> {
+    let endpoint = Endpoint::builder()
+        .alpns(vec![iroh_blobs::protocol::ALPN.to_vec()])
+        .bind()
+        .await?;
+
+    let ticket: BlobTicket = receive_coupon(
+        &CouponMachineConfig {
+            url: "wss://couponmachine.skye.vg".to_owned(),
+            realm: "halfcopy".to_owned(),
+            password_length: 3,
+        },
+        coupon,
+        endpoint.node_id(),
+    )
+    .await?;
+    let addr = ticket.node_addr().clone();
+
+    let dir_name = format!(".sendme-recv-{}", ticket.hash().to_hex());
+    let iroh_data_dir = std::env::current_dir()?.join(dir_name);
+    let db = FsStore::load(&iroh_data_dir).await?;
+
+    let hash_and_format = ticket.hash_and_format();
+    let local = db.remote().local(hash_and_format).await?;
+    let (stats, total_files, payload_size) = if !local.is_complete() {
+        let connection = endpoint.connect(addr, iroh_blobs::protocol::ALPN).await?;
+        let (_hash_seq, sizes) =
+            get_hash_seq_and_sizes(&connection, &hash_and_format.hash, 1024 * 1024 * 32, None)
+                .await?;
+        let total_size = sizes.iter().copied().sum::<u64>();
+        let payload_size = sizes.iter().skip(2).copied().sum::<u64>();
+        let total_files = (sizes.len().saturating_sub(1)) as u64;
+        eprintln!(
+            "getting collection {} {} files, {}",
+            ticket.hash().to_hex(),
+            total_files,
+            payload_size
+        );
+        let local_size = local.local_bytes();
+        let get = db.remote().execute_get(connection, local.missing());
+        let mut stats = Stats::default();
+        let mut stream = get.stream();
+        while let Some(item) = stream.next().await {
+            trace!("got item {item:?}");
+            match item {
+                GetProgressItem::Done(value) => {
+                    stats = value;
+                    break;
+                }
+                GetProgressItem::Error(cause) => {
+                    anyhow::bail!(cause);
+                }
+                _ => {}
+            }
+        }
+        (stats, total_files, payload_size)
+    } else {
+        println!("{} already complete", hash_and_format.hash);
+        let total_files = local.children().unwrap() - 1;
+        let payload_bytes = 0; // todo local.sizes().skip(2).map(Option::unwrap).sum::<u64>();
+        (Stats::default(), total_files, payload_bytes)
+    };
+
+    let collection = Collection::load(hash_and_format.hash, db.as_ref()).await?;
+    let root = std::env::current_dir()?;
+
+    for (name, hash) in collection.iter() {
+        let target = get_export_path(&root, name)?;
+        if target.exists() {
+            eprintln!(
+                "target {} already exists. Export stopped.",
+                target.display()
+            );
+            eprintln!(
+                "You can remove the file or directory and try again. The download will not be repeated."
+            );
+            anyhow::bail!("target {} already exists", target.display());
+        }
+        db.export_with_opts(ExportOptions {
+            hash: *hash,
+            target,
+            mode: ExportMode::Copy,
+        })
+        .await?;
+    }
+    tokio::fs::remove_dir_all(iroh_data_dir).await?;
+    Ok(())
+}
+
+fn get_export_path(root: &Path, name: &str) -> anyhow::Result<PathBuf> {
+    let parts = name.split('/');
+    let mut path = root.to_path_buf();
+    for part in parts {
+        validate_path_component(part)?;
+        path.push(part);
+    }
+    Ok(path)
+}
+
+fn validate_path_component(component: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !component.contains('/'),
+        "path components must not contain the only correct path separator, /"
+    );
+    Ok(())
+}

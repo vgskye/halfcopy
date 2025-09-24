@@ -1,6 +1,7 @@
 use std::{
     path::{Component, Path},
-    sync::Arc, time::Duration,
+    sync::Arc,
+    time::Duration,
 };
 
 use anyhow::{Context, anyhow};
@@ -49,52 +50,96 @@ pub async fn send(path: &Path) -> anyhow::Result<()> {
     let root = canonicalized
         .parent()
         .context("Shared path has no parent! Are you trying to share root?")?;
-    let mut entries = WalkDir::new(&canonicalized);
-    while let Some(entry) = entries.next().await {
-        let entry = entry?;
-        if entry.file_type().await?.is_file() {
-            let path = entry.path();
-            let relative = path.strip_prefix(root)?;
-            if relative.to_str().is_none() {
-                anyhow::bail!("Path {} is invalid for sharing!", relative.display());
-            }
-            let name = relative
-                .components()
-                .filter_map(|component| {
-                    if let Component::Normal(component) = component {
-                        component.to_str()
-                    } else {
-                        None
-                    }
-                })
-                .join("/");
-            let import = store.add_path_with_opts(AddPathOptions {
-                path: path.clone(),
-                mode: ImportMode::TryReference,
-                format: BlobFormat::Raw,
-            });
-            let mut stream = import.stream().await;
-            let mut item_size = 0;
-            let temp_tag = loop {
-                let item = stream
-                    .next()
-                    .await
-                    .context("import stream ended without a tag")?;
-                trace!("importing {} {item:?}", relative.display());
-                match item {
-                    AddProgressItem::Size(size) => {
-                        item_size = size;
-                    }
-                    AddProgressItem::Error(cause) => {
-                        anyhow::bail!("error importing {}: {}", relative.display(), cause);
-                    }
-                    AddProgressItem::Done(tt) => {
-                        break tt;
-                    }
-                    _ => {}
+    if canonicalized.is_file() {
+        let relative = canonicalized.strip_prefix(root)?;
+        if relative.to_str().is_none() {
+            anyhow::bail!("Path {} is invalid for sharing!", relative.display());
+        }
+        let name = relative
+            .components()
+            .filter_map(|component| {
+                if let Component::Normal(component) = component {
+                    component.to_str()
+                } else {
+                    None
                 }
-            };
-            name_and_tags.push((name, temp_tag, item_size));
+            })
+            .join("/");
+        let import = store.add_path_with_opts(AddPathOptions {
+            path: canonicalized.clone(),
+            mode: ImportMode::TryReference,
+            format: BlobFormat::Raw,
+        });
+        let mut stream = import.stream().await;
+        let mut item_size = 0;
+        let temp_tag = loop {
+            let item = stream
+                .next()
+                .await
+                .context("import stream ended without a tag")?;
+            trace!("importing {} {item:?}", relative.display());
+            match item {
+                AddProgressItem::Size(size) => {
+                    item_size = size;
+                }
+                AddProgressItem::Error(cause) => {
+                    anyhow::bail!("error importing {}: {}", relative.display(), cause);
+                }
+                AddProgressItem::Done(tt) => {
+                    break tt;
+                }
+                _ => {}
+            }
+        };
+        name_and_tags.push((name, temp_tag, item_size));
+    } else {
+        let mut entries = WalkDir::new(&canonicalized);
+        while let Some(entry) = entries.next().await {
+            let entry = entry?;
+            if entry.file_type().await?.is_file() {
+                let path = entry.path();
+                let relative = path.strip_prefix(root)?;
+                if relative.to_str().is_none() {
+                    anyhow::bail!("Path {} is invalid for sharing!", relative.display());
+                }
+                let name = relative
+                    .components()
+                    .filter_map(|component| {
+                        if let Component::Normal(component) = component {
+                            component.to_str()
+                        } else {
+                            None
+                        }
+                    })
+                    .join("/");
+                let import = store.add_path_with_opts(AddPathOptions {
+                    path: path.clone(),
+                    mode: ImportMode::TryReference,
+                    format: BlobFormat::Raw,
+                });
+                let mut stream = import.stream().await;
+                let mut item_size = 0;
+                let temp_tag = loop {
+                    let item = stream
+                        .next()
+                        .await
+                        .context("import stream ended without a tag")?;
+                    trace!("importing {} {item:?}", relative.display());
+                    match item {
+                        AddProgressItem::Size(size) => {
+                            item_size = size;
+                        }
+                        AddProgressItem::Error(cause) => {
+                            anyhow::bail!("error importing {}: {}", relative.display(), cause);
+                        }
+                        AddProgressItem::Done(tt) => {
+                            break tt;
+                        }
+                        _ => {}
+                    }
+                };
+                name_and_tags.push((name, temp_tag, item_size));
+            }
         }
     }
     name_and_tags.sort_by(|(a, _, _), (b, _, _)| a.cmp(b));
@@ -117,7 +162,7 @@ pub async fn send(path: &Path) -> anyhow::Result<()> {
 
     let remote = provide_coupon(
         &CouponMachineConfig {
-            url: "ws://localhost:8080".to_owned(),
+            url: "wss://couponmachine.skye.vg".to_owned(),
             realm: "halfcopy".to_owned(),
             password_length: 3,
         },
