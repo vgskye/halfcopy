@@ -1,6 +1,8 @@
-use std::path::{Path, PathBuf};
+use std::{path::{Path, PathBuf}, time::Duration};
 
+use console::style;
 use futures_util::StreamExt;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use iroh::Endpoint;
 use iroh_blobs::{
     api::{
@@ -16,12 +18,55 @@ use tracing::trace;
 
 use crate::coupon::{CouponMachineConfig, receive_coupon};
 
+
+fn untimed_pb(step: &str, desc: &'static str) -> ProgressBar {
+    let pb = ProgressBar::hidden();
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{prefix}{spinner:.green} {msg} [{elapsed_precise}]",
+        )
+        .unwrap(),
+    );
+    pb.set_prefix(format!("{} ", style(step).bold().dim()));
+    pb.set_message(desc);
+    pb.enable_steady_tick(Duration::from_millis(250));
+    pb
+}
+
+fn make_download_progress() -> ProgressBar {
+    let pb = ProgressBar::hidden();
+    pb.enable_steady_tick(std::time::Duration::from_millis(250));
+    pb.set_style(
+        ProgressStyle::with_template("{prefix}{spinner:.green}{msg} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} {binary_bytes_per_sec}")
+            .unwrap()
+            .progress_chars("#>-"),
+    );
+    pb.set_prefix(format!("{} ", style("[4/5]").bold().dim()));
+    pb.set_message("Downloading ...".to_string());
+    pb
+}
+
+fn make_export_overall_progress() -> ProgressBar {
+    let pb = ProgressBar::hidden();
+    pb.enable_steady_tick(std::time::Duration::from_millis(250));
+    pb.set_style(
+        ProgressStyle::with_template("{prefix}{msg}{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {human_pos}/{human_len} {per_sec}")
+            .unwrap()
+            .progress_chars("#>-"),
+    );
+    pb.set_prefix(format!("{}", style("[5/5]").bold().dim()));
+    pb
+}
+
 pub async fn recv(coupon: &str) -> anyhow::Result<()> {
     let endpoint = Endpoint::builder()
         .alpns(vec![iroh_blobs::protocol::ALPN.to_vec()])
         .bind()
         .await?;
+    
+    let mp: MultiProgress = MultiProgress::new();
 
+    let pb = mp.add(untimed_pb("[1/5]", "Retrieving ticket..."));
     let ticket: BlobTicket = receive_coupon(
         &CouponMachineConfig {
             url: "wss://couponmachine.skye.vg".to_owned(),
@@ -32,19 +77,24 @@ pub async fn recv(coupon: &str) -> anyhow::Result<()> {
         endpoint.node_id(),
     )
     .await?;
+    pb.finish_and_clear();
     let addr = ticket.node_addr().clone();
 
-    let dir_name = format!(".sendme-recv-{}", ticket.hash().to_hex());
+    let dir_name = format!(".halfcopy-recv-{}", ticket.hash().to_hex());
     let iroh_data_dir = std::env::current_dir()?.join(dir_name);
     let db = FsStore::load(&iroh_data_dir).await?;
 
     let hash_and_format = ticket.hash_and_format();
     let local = db.remote().local(hash_and_format).await?;
     let (stats, total_files, payload_size) = if !local.is_complete() {
+        let pb = mp.add(untimed_pb("[2/5]", "Connecting..."));
         let connection = endpoint.connect(addr, iroh_blobs::protocol::ALPN).await?;
+        pb.finish_and_clear();
+        let pb = mp.add(untimed_pb("[3/5]", "Getting sizes..."));
         let (_hash_seq, sizes) =
             get_hash_seq_and_sizes(&connection, &hash_and_format.hash, 1024 * 1024 * 32, None)
                 .await?;
+        pb.finish_and_clear();
         let total_size = sizes.iter().copied().sum::<u64>();
         let payload_size = sizes.iter().skip(2).copied().sum::<u64>();
         let total_files = (sizes.len().saturating_sub(1)) as u64;
@@ -54,13 +104,20 @@ pub async fn recv(coupon: &str) -> anyhow::Result<()> {
             total_files,
             payload_size
         );
-        let local_size = local.local_bytes();
+        let mut position = local.local_bytes();
+        let op = mp.add(make_download_progress());
+        op.set_length(total_size);
+        op.set_position(position);
         let get = db.remote().execute_get(connection, local.missing());
         let mut stats = Stats::default();
         let mut stream = get.stream();
         while let Some(item) = stream.next().await {
             trace!("got item {item:?}");
             match item {
+                GetProgressItem::Progress(offset) => {
+                    position += offset;
+                    op.set_position(position);
+                }
                 GetProgressItem::Done(value) => {
                     stats = value;
                     break;
@@ -68,9 +125,9 @@ pub async fn recv(coupon: &str) -> anyhow::Result<()> {
                 GetProgressItem::Error(cause) => {
                     anyhow::bail!(cause);
                 }
-                _ => {}
             }
         }
+        op.finish_and_clear();
         (stats, total_files, payload_size)
     } else {
         println!("{} already complete", hash_and_format.hash);
@@ -82,7 +139,10 @@ pub async fn recv(coupon: &str) -> anyhow::Result<()> {
     let collection = Collection::load(hash_and_format.hash, db.as_ref()).await?;
     let root = std::env::current_dir()?;
 
-    for (name, hash) in collection.iter() {
+    let op = mp.add(make_export_overall_progress());
+    op.set_length(collection.len() as u64);
+    for (i, (name, hash)) in collection.iter().enumerate() {
+        op.set_position(i as u64);
         let target = get_export_path(&root, name)?;
         if target.exists() {
             eprintln!(
@@ -101,6 +161,7 @@ pub async fn recv(coupon: &str) -> anyhow::Result<()> {
         })
         .await?;
     }
+    op.finish_and_clear();
     tokio::fs::remove_dir_all(iroh_data_dir).await?;
     Ok(())
 }

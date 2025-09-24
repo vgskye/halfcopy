@@ -31,10 +31,10 @@ pub async fn send(path: &Path) -> anyhow::Result<()> {
 
     let suffix = rand::thread_rng().r#gen::<[u8; 16]>();
     let cwd = canonicalize(std::env::current_dir()?).await?;
-    let mut blobs_data_dir = cwd.join(format!(".sendme-send-{}", hex::encode(suffix)));
+    let mut blobs_data_dir = cwd.join(format!(".halfcopy-send-{}", hex::encode(suffix)));
     while blobs_data_dir.exists() {
         let suffix = rand::thread_rng().r#gen::<[u8; 16]>();
-        blobs_data_dir = cwd.join(format!(".sendme-send-{}", hex::encode(suffix)));
+        blobs_data_dir = cwd.join(format!(".halfcopy-send-{}", hex::encode(suffix)));
     }
 
     let canonicalized = canonicalize(path).await?;
