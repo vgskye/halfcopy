@@ -1,4 +1,7 @@
-use std::{path::{Path, PathBuf}, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use console::style;
 use futures_util::StreamExt;
@@ -18,14 +21,10 @@ use tracing::trace;
 
 use crate::coupon::{CouponMachineConfig, receive_coupon};
 
-
 fn untimed_pb(step: &str, desc: &'static str) -> ProgressBar {
     let pb = ProgressBar::hidden();
     pb.set_style(
-        ProgressStyle::with_template(
-            "{prefix}{spinner:.green} {msg} [{elapsed_precise}]",
-        )
-        .unwrap(),
+        ProgressStyle::with_template("{prefix}{spinner:.green} {msg} [{elapsed_precise}]").unwrap(),
     );
     pb.set_prefix(format!("{} ", style(step).bold().dim()));
     pb.set_message(desc);
@@ -63,7 +62,7 @@ pub async fn recv(coupon: &str) -> anyhow::Result<()> {
         .alpns(vec![iroh_blobs::protocol::ALPN.to_vec()])
         .bind()
         .await?;
-    
+
     let mp: MultiProgress = MultiProgress::new();
 
     let pb = mp.add(untimed_pb("[1/5]", "Retrieving ticket..."));

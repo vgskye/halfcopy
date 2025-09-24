@@ -1312,6 +1312,7 @@ dependencies = [
  "iroh",
  "iroh-base",
  "iroh-blobs",
+ "irpc",
  "itertools",
  "postcard",
  "rand 0.8.5",
