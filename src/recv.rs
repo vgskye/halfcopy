@@ -103,7 +103,7 @@ pub async fn recv(coupon: &str) -> anyhow::Result<()> {
             total_files,
             payload_size
         );
-        let mut position = local.local_bytes();
+        let position = local.local_bytes();
         let op = mp.add(make_download_progress());
         op.set_length(total_size);
         op.set_position(position);
@@ -114,8 +114,7 @@ pub async fn recv(coupon: &str) -> anyhow::Result<()> {
             trace!("got item {item:?}");
             match item {
                 GetProgressItem::Progress(offset) => {
-                    position += offset;
-                    op.set_position(position);
+                    op.set_position(position + offset);
                 }
                 GetProgressItem::Done(value) => {
                     stats = value;
