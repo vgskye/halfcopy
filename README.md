@@ -5,7 +5,7 @@ Copy a file or directory from device A to device B.
 [![asciicast](https://asciinema.org/a/uf9HuqXsoVmhr2Oz0BQae8Obv.svg)](https://asciinema.org/a/uf9HuqXsoVmhr2Oz0BQae8Obv)
 
 ## Install
-Releases tab for instructions.
+Find the binaries in [Releases](https://github.com/vgskye/halfcopy/releases/latest), or install from source.
 
 ## Usage
 To send:
