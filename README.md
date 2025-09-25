@@ -1,6 +1,9 @@
 # halfcopy
 Copy a file or directory from device A to device B.
 
+## Demo
+[![asciicast](https://asciinema.org/a/uf9HuqXsoVmhr2Oz0BQae8Obv.svg)](https://asciinema.org/a/uf9HuqXsoVmhr2Oz0BQae8Obv)
+
 ## Install
 Releases tab for instructions.
 
