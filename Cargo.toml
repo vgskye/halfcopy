@@ -3,6 +3,9 @@ name = "halfcopy"
 version = "0.2.1"
 edition = "2024"
 repository = "https://github.com/vgskye/halfcopy"
+description = "Copy a file or directory from device A to device B."
+license = "MIT"
+categories = ["command-line-utilities"]
 
 [dependencies]
 anyhow = "1.0.100"
