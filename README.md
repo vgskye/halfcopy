@@ -1,3 +1,6 @@
+> [!NOTE]
+> This is the repository for halfcopy CLI. See other repositories for [GUI](https://github.com/vgskye/halfcopy-gui), [dialing server](https://github.com/vgskye/couponmachine), and [docs](https://github.com/vgskye/halfcopy-docs).
+
 # halfcopy
 Copy a file or directory from device A to device B.
 
